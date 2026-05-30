@@ -1,0 +1,6 @@
+# wauditor Python dependencies
+# All heavy lifting is done by system tools (aircrack-ng, hcxdumptool, hashcat)
+# Python stdlib only — no pip installs needed
+
+# Optional: scapy for low-level packet crafting (not required for basic use)
+# scapy>=2.5.0
