@@ -65,7 +65,6 @@ sudo cp iwconfig /usr/sbin/iwconfig
 
 ## Step 2 — Prepare Interface
 
-Your card: **Realtek RTL8821CE** (driver: rtw88_8821ce)
 
 Enable monitor mode manually before each session:
 ```bash
