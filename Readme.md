@@ -234,3 +234,6 @@ git clone https://github.com/danielmiessler/SecLists.git
 Only use this tool on networks you own or have explicit written permission to test.
 Unauthorized access to computer networks is illegal in Pakistan (PECA 2016, Section 3)
 and in every other jurisdiction worldwide.
+
+## Author 
+Qamber 
