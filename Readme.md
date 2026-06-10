@@ -229,6 +229,8 @@ git clone https://github.com/danielmiessler/SecLists.git
 
 ---
 
+## Author
+Qamber
 ## Legal Notice
 
 Only use this tool on networks you own or have explicit written permission to test.
