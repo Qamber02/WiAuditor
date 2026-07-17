@@ -21,6 +21,7 @@ wauditor/
 ├── utils/
 │   ├── logger.py         # Colored terminal output
 │   ├── tools.py          # Tool availability checker
+│   ├── wordlist.py       # Auto-detects / resolves rockyou.txt
 │   └── banner.py         # ASCII banner
 └── captures/             # Auto-created, stores all capture files
 ```
@@ -131,7 +132,7 @@ sudo python main.py -i wlp1s0 --timeout 120 --scan-only
 | `--attack` | `wpa2`, `pmkid`, `wpa3`, `all` | `all` |
 | `--bssid` | Target specific BSSID | all |
 | `--essid` | Target specific network name | all |
-| `--wordlist` | Path to wordlist for cracking | none |
+| `--wordlist` | Path to wordlist for cracking | auto-detects rockyou.txt |
 | `--timeout` | Scan timeout in seconds | 60 |
 | `--deauth-count` | Deauth packets per burst | 5 |
 | `--channel` | Lock to channel | all channels |
@@ -216,15 +217,34 @@ Or wauditor handles this automatically on exit/Ctrl+C.
 
 ## Wordlists
 
-Good wordlists for testing:
-```bash
-# rockyou (classic)
-sudo dnf install wordlists
-# or
-wget https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt
+### rockyou.txt (auto-detected by wauditor)
 
-# SecLists
-git clone https://github.com/danielmiessler/SecLists.git
+wauditor automatically searches these locations for `rockyou.txt` — no `--wordlist` flag needed once installed:
+- `/usr/share/wordlists/rockyou.txt`
+- `/opt/rockyou.txt`
+- `/root/rockyou.txt`
+- `/usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt`
+
+**Nobara / Fedora — install rockyou.txt:**
+```bash
+# rockyou.txt is not in Fedora/Nobara repos — download directly:
+sudo mkdir -p /usr/share/wordlists
+sudo curl -L "https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt" \
+     -o /usr/share/wordlists/rockyou.txt
+
+# Verify (~140 MB, 14 million passwords)
+wc -l /usr/share/wordlists/rockyou.txt
+# Expected: 14344391
+```
+
+**Kali Linux — rockyou.txt is pre-installed (compressed):**
+```bash
+sudo gzip -d -k /usr/share/wordlists/rockyou.txt.gz
+```
+
+### SecLists (extended wordlists)
+```bash
+git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists
 ```
 
 ---

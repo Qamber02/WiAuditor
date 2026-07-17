@@ -41,7 +41,8 @@ def parse_args():
                         help="Attack type to use")
     parser.add_argument("--bssid", help="Target specific BSSID")
     parser.add_argument("--essid", help="Target specific ESSID")
-    parser.add_argument("--wordlist", help="Path to wordlist for cracking")
+    parser.add_argument("--wordlist",
+                        help="Path to wordlist for cracking (default: auto-detects rockyou.txt)")
     parser.add_argument("--timeout", type=int, default=60,
                         help="Scan timeout in seconds (default: 60)")
     parser.add_argument("--deauth-count", type=int, default=5,

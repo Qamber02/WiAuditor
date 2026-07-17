@@ -4,6 +4,7 @@ Routes to correct attack module based on target encryption
 """
 
 from utils.logger import Logger
+from utils.wordlist import resolve_wordlist
 from attacks.wpa2 import WPA2Attack
 from attacks.pmkid import PMKIDAttack
 from attacks.wpa3 import WPA3Attack
@@ -27,6 +28,9 @@ class AttackOrchestrator:
 
         log.info(f"\nTarget: {self.target['essid']} | {self.target['bssid']} | "
                  f"CH {self.target['channel']} | {self.target['enc']}")
+
+        # Resolve wordlist: auto-detect rockyou.txt if nothing was supplied
+        self.wordlist = resolve_wordlist(self.wordlist)
 
         if enc == "open":
             log.warn("Network is open (no encryption). Nothing to crack.")
@@ -67,9 +71,18 @@ class AttackOrchestrator:
                         log.success(f"\n[+] PASSWORD FOUND: {cracked}")
                         self._save_result({"password": cracked, "attack": name})
                         return True
+                    else:
+                        # BUG 4 FIX: crack() returned None — give specific feedback
+                        # instead of falling through to the generic "All attacks exhausted"
+                        log.warn("[!] Cracking complete — password not in wordlist.")
+                        log.info(f"[*] Capture saved: {result['capfile']}")
+                        log.info(f"[*] Try a bigger wordlist:")
+                        log.info(f"    hashcat -m 22000 {result['capfile']} /usr/share/wordlists/rockyou.txt")
+                        log.info(f"    hashcat -m 22000 {result['capfile']} <custom_wordlist> -r best64.rule")
                 else:
-                    log.warn("[!] No wordlist provided. Capture saved for manual cracking.")
-                    log.info(f"[*] Run: hashcat -m 22000 {result['capfile']} <wordlist>")
+                    log.warn("[!] No wordlist available. Capture saved for manual cracking.")
+                    log.info(f"[*] Run: hashcat -m 22000 {result['capfile']} /usr/share/wordlists/rockyou.txt")
+
 
             else:
                 log.warn(f"[-] {name} failed or timed out")
