@@ -17,6 +17,7 @@ if os.geteuid() != 0:
 from core.interface import InterfaceManager
 from core.scanner import Scanner
 from core.attack import AttackOrchestrator
+from cracking.crack_orchestrator import CrackConfig
 from utils.logger import Logger
 from utils.banner import print_banner
 
@@ -49,6 +50,33 @@ def parse_args():
                         help="Number of deauth packets to send (default: 5)")
     parser.add_argument("--channel", type=int, help="Lock to specific channel")
     parser.add_argument("--output", default="./captures", help="Output directory for captures")
+
+    # ── Hashcat / cracking options ────────────────────────────────────────
+    cracking = parser.add_argument_group("Cracking options (hashcat integration)")
+    cracking.add_argument(
+        "--cracker", choices=["hashcat", "aircrack", "auto"], default="auto",
+        help="Cracking engine: hashcat (GPU), aircrack (CPU), auto (default: auto — "
+             "uses hashcat if available, falls back to aircrack-ng)"
+    )
+    cracking.add_argument(
+        "--hashcat-rules", nargs="+", metavar="RULE",
+        help="Rule file(s) for hashcat (e.g., best66 dive rockyou-30000). "
+             "Accepts bare names or full paths."
+    )
+    cracking.add_argument(
+        "--hashcat-mask", metavar="MASK",
+        help="Custom mask pattern for hashcat brute-force (e.g., ?d?d?d?d?d?d?d?d)"
+    )
+    cracking.add_argument(
+        "--no-escalate", action="store_true",
+        help="Disable auto-escalation through cracking phases "
+             "(dictionary → rules → mask). Only run the first matching phase."
+    )
+    cracking.add_argument(
+        "--crack-timeout", type=int, metavar="SECONDS",
+        help="Per-phase timeout for cracking in seconds (default: no limit, Ctrl+C to stop)"
+    )
+
     return parser.parse_args()
 
 
@@ -58,6 +86,16 @@ def main():
 
     # Setup output dir
     os.makedirs(args.output, exist_ok=True)
+
+    # ── Build cracker configuration from CLI flags ────────────────────────
+    cracker_config = CrackConfig(
+        cracker=args.cracker,
+        wordlist=args.wordlist,          # may be None — resolved later
+        custom_rules=args.hashcat_rules,
+        custom_mask=args.hashcat_mask,
+        no_escalate=args.no_escalate,
+        timeout=args.crack_timeout,
+    )
 
     # Interface setup
     iface_mgr = InterfaceManager()
@@ -124,7 +162,8 @@ def main():
         attack_type=args.attack,
         wordlist=args.wordlist,
         output_dir=args.output,
-        deauth_count=args.deauth_count
+        deauth_count=args.deauth_count,
+        cracker_config=cracker_config,
     )
     orchestrator.run()
 
@@ -135,3 +174,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

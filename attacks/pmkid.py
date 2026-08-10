@@ -143,57 +143,18 @@ class PMKIDAttack:
         return False
 
     def crack(self, hashfile):
-        """Crack PMKID hash with hashcat"""
-        if not self.wordlist:
-            return None
+        """Crack PMKID hash — delegates to CrackOrchestrator.
 
-        if not check_tool("hashcat"):
-            log.warn("hashcat not found")
-            return None
+        Kept for backward compatibility with AttackOrchestrator's flow.
+        The real cracking logic (hashcat with GPU, rules, masks, and
+        aircrack-ng fallback) lives in cracking.crack_orchestrator.
+        """
+        from cracking.crack_orchestrator import CrackOrchestrator, CrackConfig
 
-        log.info(f"Cracking PMKID with hashcat (mode 22000)...")
-        log.info(f"Wordlist: {self.wordlist}")
+        config = CrackConfig(
+            wordlist=self.wordlist,
+            bssid=self.target["bssid"],
+        )
+        orchestrator = CrackOrchestrator(config)
+        return orchestrator.crack(hashfile)
 
-        potfile = hashfile + ".pot"
-
-        cmd = [
-            "hashcat",
-            "-m", "22000",          # WPA-PMKID-PBKDF2
-            hashfile,
-            self.wordlist,
-            "--potfile-path", potfile,
-            "--quiet",
-            "--status",
-            "--status-timer", "10",
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True, text=True,
-                timeout=600
-            )
-
-            # Check potfile for cracked password
-            if os.path.exists(potfile):
-                with open(potfile) as f:
-                    content = f.read().strip()
-                if content:
-                    # Format: hash:password
-                    parts = content.split(":")
-                    if parts:
-                        return parts[-1]
-
-            # Check stdout
-            for line in result.stdout.splitlines():
-                if ":" in line and not line.startswith("#"):
-                    parts = line.strip().split(":")
-                    if len(parts) >= 2:
-                        return parts[-1]
-
-        except subprocess.TimeoutExpired:
-            log.warn("Hashcat timed out")
-        except Exception as e:
-            log.error(f"Hashcat error: {e}")
-
-        return None
